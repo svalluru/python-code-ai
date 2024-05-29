@@ -1,5 +1,6 @@
 langchain-community==0.0.38
 langchain-text-splitters
 langchain==0.1.19
+sentence-transformers==2.7.0
 kafka-python==2.0.2
 kafka-python-ng==2.2.2
