@@ -8,9 +8,9 @@ import logging
 
 # To consume kafka messages
 consumer = KafkaConsumer('customerdata',
-                         bootstrap_servers=['localhost:9092'],auto_offset_reset='earliest', enable_auto_commit=False)
+                         bootstrap_servers=['my-cluster-kafka-bootstrap.sri-support-tech-app.svc.cluster.local:9092'],auto_offset_reset='earliest', enable_auto_commit=False)
 
-redis_url = "redis://default:mypassword@localhost:6379"
+redis_url = "redis://default:q07rXXlq@my-doc-headless.sri-support-tech-app.svc.cluster.local:15928"
 index_name = "customerdataidx"
 schema_name = "redis_schema.yaml"
 
@@ -33,7 +33,7 @@ for message in consumer:
                            embeddings,
                            redis_url=redis_url,
                            index_name=index_name)
-    rds.write_schema("redis_schema.yaml")                           
+    rds.write_schema("redis_schema.yaml")
     rds.add_documents(texts)
     #print(str)
 
