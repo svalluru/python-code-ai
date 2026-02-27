@@ -1,0 +1,72 @@
+---
+# Create a one-time schedule on an AAP Job Template for a user-chosen date/time.
+# Use this from a workflow: after an approval node, run a JT that runs this playbook.
+# Pass scheduled_run_at and remediation_job_template_name via workflow survey or extra vars.
+#
+# Requirements:
+#   - pip: ansible
+#   - ansible-galaxy collection install awx.awx
+#   - Job Template must have a Controller API credential (or set controller_* env vars).
+#
+# Extra vars (from workflow survey or JT default):
+#   scheduled_run_at:          "YYYY-MM-DD HH:MM" (24-hour, UTC or set timezone below)
+#   remediation_job_template_name:  Name of the JT to schedule (e.g. "Remediation - Top 5 CVEs")
+# Optional:
+#   controller_host:           AAP URL (if not from credential)
+#   controller_username:       (if not from credential)
+#   controller_password:       (if not from credential)
+#   schedule_timezone:         "UTC" (default) - used only for display; rrule uses UTC from parsed time
+
+- name: Create one-time schedule for remediation job
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # Default: run at 02:00 UTC on the given date if only date is provided
+    scheduled_run_at: "{{ scheduled_run_at | default('') }}"
+    remediation_job_template_name: "{{ remediation_job_template_name | default('Remediation - Top 5 CVEs') }}"
+    # Build iCal rrule for one-time run at the given datetime (UTC).
+    # Input format: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
+    _date_part: "{{ (scheduled_run_at | trim).split(' ')[0] | default('') }}"
+    _time_part: "{{ (scheduled_run_at | trim).split(' ')[1] | default('00:00') }}"
+    # Normalize time to HH:MM:SS
+    _time_padded: "{{ (_time_part + ':00')[:8] if _time_part | length <= 5 else _time_part }}"
+    _dtstart: "{{ _date_part.replace('-', '') }}T{{ _time_padded.replace(':', '') }}Z"
+    schedule_rrule: "DTSTART:{{ _dtstart }} RRULE:FREQ=MINUTELY;INTERVAL=1;COUNT=1"
+    schedule_name: "Remediation one-time {{ scheduled_run_at | trim | replace(' ', '_') | replace(':', '') }}"
+
+  tasks:
+    - name: Validate scheduled_run_at
+      assert:
+        that:
+          - scheduled_run_at | length > 0
+          - _date_part | length == 10
+        fail_msg: "scheduled_run_at must be set and in format 'YYYY-MM-DD HH:MM' (e.g. 2026-03-15 02:00)"
+      run_once: true
+
+    - name: Create one-time schedule on remediation job template
+      awx.awx.schedule:
+        name: "{{ schedule_name }}"
+        state: present
+        unified_job_template: "{{ remediation_job_template_name }}"
+        rrule: "{{ schedule_rrule }}"
+        enabled: true
+        description: "One-time run approved via workflow (requested {{ scheduled_run_at }})"
+      register: schedule_result
+      run_once: true
+
+    - name: Show schedule result
+      ansible.builtin.debug:
+        msg: >
+          One-time schedule created successfully.
+          Job template: {{ remediation_job_template_name }}
+          Run at (UTC): {{ scheduled_run_at }}
+          Schedule name: {{ schedule_name }}
+          Next run will be triggered automatically by AAP at the scheduled time.
+      run_once: true
+      when: schedule_result is changed
+
+    - name: Schedule already exists (idempotent)
+      ansible.builtin.debug:
+        msg: "Schedule '{{ schedule_name }}' already exists for {{ remediation_job_template_name }}."
+      run_once: true
+      when: schedule_result is not changed
