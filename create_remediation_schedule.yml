@@ -8,9 +8,11 @@
 #   - ansible-galaxy collection install awx.awx
 #   - Job Template must have a Controller API credential (or set controller_* env vars).
 #
-# Extra vars (from workflow survey or JT default):
+# Extra vars (from workflow survey, JT default, or curl launch body):
 #   scheduled_run_at:          "YYYY-MM-DD HH:MM" (24-hour, UTC or set timezone below)
 #   remediation_job_template_name:  Name of the JT to schedule (e.g. "Remediation - Top 5 CVEs")
+#   remediation_extra_vars:    Optional dict of extra_vars to pass to the remediation job when the schedule runs.
+#                              e.g. {"remediation_hosts": ["host1","host2"], "cve_list": ["CVE-2025-13601"]}
 # Optional:
 #   controller_host:           AAP URL (if not from credential)
 #   controller_username:       (if not from credential)
@@ -24,6 +26,8 @@
     # Default: run at 02:00 UTC on the given date if only date is provided
     scheduled_run_at: "{{ scheduled_run_at | default('') }}"
     remediation_job_template_name: "{{ remediation_job_template_name | default('Remediation - Top 5 CVEs') }}"
+    # Extra vars to pass to the remediation job when the schedule runs (e.g. remediation_hosts, cve_list)
+    remediation_extra_vars: "{{ remediation_extra_vars | default({}) }}"
     # Build iCal rrule for one-time run at the given datetime (UTC).
     # Input format: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
     _date_part: "{{ (scheduled_run_at | trim).split(' ')[0] | default('') }}"
@@ -51,6 +55,7 @@
         rrule: "{{ schedule_rrule }}"
         enabled: true
         description: "One-time run approved via workflow (requested {{ scheduled_run_at }})"
+        extra_data: "{{ remediation_extra_vars }}"
       register: schedule_result
       run_once: true
 
