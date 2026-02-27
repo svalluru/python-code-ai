@@ -10,11 +10,10 @@
 #
 # Extra vars (from workflow survey, JT default, or launch API body):
 #   scheduled_run_at:          "YYYY-MM-DD HH:MM" (24-hour, UTC or set timezone below)
-#   When using the GitLab webhook URL, the POST body may not be used as extra_vars; use the
-#   launch endpoint (POST .../job_templates/ID/launch/) with Authorization/Bearer token to pass extra_vars.
 #   remediation_job_template_name:  Name of the JT to schedule (e.g. "Remediation - Top 5 CVEs")
 #   remediation_extra_vars:    Optional dict of extra_vars to pass to the remediation job when the schedule runs.
-#                              e.g. {"remediation_hosts": ["host1","host2"], "cve_list": ["CVE-2025-13601"]}
+#   You can pass these at the top level OR nested under "extra_vars" (e.g. JT default {"extra_vars": {"scheduled_run_at": "..."}}).
+#   When using the GitLab webhook URL, use the launch endpoint with Bearer token to pass extra_vars.
 # Optional:
 #   controller_host:           AAP URL (if not from credential)
 #   controller_username:       (if not from credential)
@@ -24,22 +23,34 @@
 - name: Create one-time schedule for remediation job
   hosts: localhost
   gather_facts: false
-  vars:
-    remediation_job_template_name: "{{ remediation_job_template_name | default('Remediation - Top 5 CVEs') }}"
-    # Extra vars to pass to the remediation job when the schedule runs (e.g. remediation_hosts, cve_list)
-    remediation_extra_vars: "{{ remediation_extra_vars | default({}) }}"
+  vars: {}
 
   tasks:
-    # Normalize in a task so we never run string/trim on a non-string (e.g. GitLab webhook sends different payload)
+    # Resolve input from top-level vars or from nested extra_vars (JT default often uses {"extra_vars": {...}})
+    - name: Resolve extra vars (top-level or nested under extra_vars)
+      ansible.builtin.set_fact:
+        _scheduled_run_at: "{{ scheduled_run_at | default(extra_vars.scheduled_run_at | default('') if (extra_vars is defined and extra_vars is mapping) else '') }}"
+        _remediation_job_template_name: "{{ remediation_job_template_name | default(extra_vars.remediation_job_template_name | default('Remediation - Top 5 CVEs') if (extra_vars is defined and extra_vars is mapping) else 'Remediation - Top 5 CVEs') }}"
+        _remediation_extra_vars: "{{ remediation_extra_vars | default(extra_vars.remediation_extra_vars | default({}) if (extra_vars is defined and extra_vars is mapping) else {}) }}"
+      when: extra_vars is defined or scheduled_run_at is defined or remediation_job_template_name is defined or remediation_extra_vars is defined
+
+    - name: Resolve extra vars when no vars passed yet
+      ansible.builtin.set_fact:
+        _scheduled_run_at: ""
+        _remediation_job_template_name: "Remediation - Top 5 CVEs"
+        _remediation_extra_vars: {}
+      when: extra_vars is not defined and scheduled_run_at is not defined and remediation_job_template_name is not defined and remediation_extra_vars is not defined
+
+    # Normalize so we never run string/trim on a non-string
     - name: Normalize scheduled_run_at
       ansible.builtin.set_fact:
-        scheduled_run_at_clean: "{{ scheduled_run_at | trim }}"
-      when: scheduled_run_at is defined and scheduled_run_at is string
+        scheduled_run_at_clean: "{{ _scheduled_run_at | trim }}"
+      when: _scheduled_run_at is defined and _scheduled_run_at is string
 
     - name: Set empty scheduled_run_at when missing or not a string
       ansible.builtin.set_fact:
         scheduled_run_at_clean: ""
-      when: scheduled_run_at is not defined or scheduled_run_at is not string
+      when: _scheduled_run_at is not defined or _scheduled_run_at is not string
 
     - name: Derive date/time parts and rrule from scheduled_run_at_clean
       ansible.builtin.set_fact:
@@ -75,11 +86,11 @@
       awx.awx.schedule:
         name: "{{ schedule_name }}"
         state: present
-        unified_job_template: "{{ remediation_job_template_name }}"
+        unified_job_template: "{{ _remediation_job_template_name }}"
         rrule: "{{ schedule_rrule }}"
         enabled: true
         description: "One-time run approved via workflow (requested {{ scheduled_run_at_clean }})"
-        extra_data: "{{ remediation_extra_vars }}"
+        extra_data: "{{ _remediation_extra_vars }}"
       register: schedule_result
       run_once: true
 
@@ -87,7 +98,7 @@
       ansible.builtin.debug:
         msg: >
           One-time schedule created successfully.
-          Job template: {{ remediation_job_template_name }}
+          Job template: {{ _remediation_job_template_name }}
           Run at (UTC): {{ scheduled_run_at_clean }}
           Schedule name: {{ schedule_name }}
           Next run will be triggered automatically by AAP at the scheduled time.
@@ -96,6 +107,6 @@
 
     - name: Schedule already exists (idempotent)
       ansible.builtin.debug:
-        msg: "Schedule '{{ schedule_name }}' already exists for {{ remediation_job_template_name }}."
+        msg: "Schedule '{{ schedule_name }}' already exists for {{ _remediation_job_template_name }}."
       run_once: true
       when: schedule_result is not changed
