@@ -8,8 +8,10 @@
 #   - ansible-galaxy collection install awx.awx
 #   - Job Template must have a Controller API credential (or set controller_* env vars).
 #
-# Extra vars (from workflow survey, JT default, or curl launch body):
+# Extra vars (from workflow survey, JT default, or launch API body):
 #   scheduled_run_at:          "YYYY-MM-DD HH:MM" (24-hour, UTC or set timezone below)
+#   When using the GitLab webhook URL, the POST body may not be used as extra_vars; use the
+#   launch endpoint (POST .../job_templates/ID/launch/) with Authorization/Bearer token to pass extra_vars.
 #   remediation_job_template_name:  Name of the JT to schedule (e.g. "Remediation - Top 5 CVEs")
 #   remediation_extra_vars:    Optional dict of extra_vars to pass to the remediation job when the schedule runs.
 #                              e.g. {"remediation_hosts": ["host1","host2"], "cve_list": ["CVE-2025-13601"]}
@@ -23,29 +25,46 @@
   hosts: localhost
   gather_facts: false
   vars:
-    # Coerce to string; treat undefined/null as empty so validation can fail with a clear message
-    scheduled_run_at: "{{ scheduled_run_at | default('', true) | string | trim }}"
     remediation_job_template_name: "{{ remediation_job_template_name | default('Remediation - Top 5 CVEs') }}"
     # Extra vars to pass to the remediation job when the schedule runs (e.g. remediation_hosts, cve_list)
     remediation_extra_vars: "{{ remediation_extra_vars | default({}) }}"
-    # Build iCal rrule for one-time run at the given datetime (UTC).
-    # Input format: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
-    _parts: "{{ (scheduled_run_at.split(' ') + ['', '00:00'])[:2] }}"
-    _date_part: "{{ _parts[0] }}"
-    _time_part: "{{ _parts[1] }}"
-    # Normalize time to HH:MM:SS
-    _time_padded: "{{ (_time_part + ':00')[:8] if _time_part | length <= 5 else _time_part }}"
-    _dtstart: "{{ _date_part.replace('-', '') }}T{{ _time_padded.replace(':', '') }}Z"
-    schedule_rrule: "DTSTART:{{ _dtstart }} RRULE:FREQ=MINUTELY;INTERVAL=1;COUNT=1"
-    schedule_name: "Remediation one-time {{ scheduled_run_at | trim | replace(' ', '_') | replace(':', '') }}"
 
   tasks:
+    # Normalize in a task so we never run string/trim on a non-string (e.g. GitLab webhook sends different payload)
+    - name: Normalize scheduled_run_at
+      ansible.builtin.set_fact:
+        scheduled_run_at_clean: "{{ scheduled_run_at | trim }}"
+      when: scheduled_run_at is defined and scheduled_run_at is string
+
+    - name: Set empty scheduled_run_at when missing or not a string
+      ansible.builtin.set_fact:
+        scheduled_run_at_clean: ""
+      when: scheduled_run_at is not defined or scheduled_run_at is not string
+
+    - name: Derive date/time parts and rrule from scheduled_run_at_clean
+      ansible.builtin.set_fact:
+        _parts: "{{ (scheduled_run_at_clean.split(' ') + ['', '00:00'])[:2] }}"
+      run_once: true
+
+    - name: Set date and time facts
+      ansible.builtin.set_fact:
+        _date_part: "{{ _parts[0] }}"
+        _time_part: "{{ _parts[1] }}"
+      run_once: true
+
+    - name: Set schedule rrule and name
+      ansible.builtin.set_fact:
+        _time_padded: "{{ (_time_part + ':00')[:8] if _time_part | length <= 5 else _time_part }}"
+        schedule_rrule: "DTSTART:{{ _date_part.replace('-', '') }}T{{ ((_time_part + ':00')[:8] if _time_part | length <= 5 else _time_part).replace(':', '') }}Z RRULE:FREQ=MINUTELY;INTERVAL=1;COUNT=1"
+        schedule_name: "Remediation one-time {{ scheduled_run_at_clean | replace(' ', '_') | replace(':', '') }}"
+      run_once: true
+
     - name: Validate scheduled_run_at
       assert:
         that:
-          - scheduled_run_at | length > 0
+          - scheduled_run_at_clean | length > 0
           - _date_part | length == 10
-        fail_msg: "scheduled_run_at must be set and in format 'YYYY-MM-DD HH:MM' (e.g. 2026-03-15 02:00)"
+        fail_msg: "scheduled_run_at must be set and in format 'YYYY-MM-DD HH:MM' (e.g. 2026-03-15 02:00). When using GitLab webhook URL, use the launch API with extra_vars instead, or ensure the webhook body is merged as extra_vars."
       run_once: true
 
     - name: Create one-time schedule on remediation job template
@@ -55,7 +74,7 @@
         unified_job_template: "{{ remediation_job_template_name }}"
         rrule: "{{ schedule_rrule }}"
         enabled: true
-        description: "One-time run approved via workflow (requested {{ scheduled_run_at }})"
+        description: "One-time run approved via workflow (requested {{ scheduled_run_at_clean }})"
         extra_data: "{{ remediation_extra_vars }}"
       register: schedule_result
       run_once: true
@@ -65,7 +84,7 @@
         msg: >
           One-time schedule created successfully.
           Job template: {{ remediation_job_template_name }}
-          Run at (UTC): {{ scheduled_run_at }}
+          Run at (UTC): {{ scheduled_run_at_clean }}
           Schedule name: {{ schedule_name }}
           Next run will be triggered automatically by AAP at the scheduled time.
       run_once: true
