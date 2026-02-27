@@ -23,15 +23,16 @@
   hosts: localhost
   gather_facts: false
   vars:
-    # Default: run at 02:00 UTC on the given date if only date is provided
-    scheduled_run_at: "{{ scheduled_run_at | default('') }}"
+    # Coerce to string; treat undefined/null as empty so validation can fail with a clear message
+    scheduled_run_at: "{{ scheduled_run_at | default('', true) | string | trim }}"
     remediation_job_template_name: "{{ remediation_job_template_name | default('Remediation - Top 5 CVEs') }}"
     # Extra vars to pass to the remediation job when the schedule runs (e.g. remediation_hosts, cve_list)
     remediation_extra_vars: "{{ remediation_extra_vars | default({}) }}"
     # Build iCal rrule for one-time run at the given datetime (UTC).
     # Input format: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
-    _date_part: "{{ (scheduled_run_at | trim).split(' ')[0] | default('') }}"
-    _time_part: "{{ (scheduled_run_at | trim).split(' ')[1] | default('00:00') }}"
+    _parts: "{{ (scheduled_run_at.split(' ') + ['', '00:00'])[:2] }}"
+    _date_part: "{{ _parts[0] }}"
+    _time_part: "{{ _parts[1] }}"
     # Normalize time to HH:MM:SS
     _time_padded: "{{ (_time_part + ':00')[:8] if _time_part | length <= 5 else _time_part }}"
     _dtstart: "{{ _date_part.replace('-', '') }}T{{ _time_padded.replace(':', '') }}Z"
