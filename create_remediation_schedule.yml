@@ -64,7 +64,11 @@
         that:
           - scheduled_run_at_clean | length > 0
           - _date_part | length == 10
-        fail_msg: "scheduled_run_at must be set and in format 'YYYY-MM-DD HH:MM' (e.g. 2026-03-15 02:00). When using GitLab webhook URL, use the launch API with extra_vars instead, or ensure the webhook body is merged as extra_vars."
+        fail_msg: >-
+          scheduled_run_at is required. Format: 'YYYY-MM-DD HH:MM' (e.g. 2026-03-15 02:00).
+          To pass it from the UI: when launching, either (1) fill in the Survey field for scheduled_run_at,
+          or (2) in the Launch form, open 'Extra Variables' and add: scheduled_run_at: "2026-03-20 14:00".
+          In the Job Template: enable 'Prompt for extra variables' and add a Survey question with variable name 'scheduled_run_at'.
       run_once: true
 
     - name: Create one-time schedule on remediation job template
